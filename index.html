@@ -3,117 +3,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ephemeral Chat 🚀</title>
+  <title>Fancy Chat + Video 🚀</title>
   <style>
-    body {
-      margin: 0;
-      font-family: "Segoe UI", Tahoma, sans-serif;
-      background: #f0f2f5;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
-
-    .chat-container {
-      width: 400px;
-      height: 600px;
-      background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .chat-header {
-      background: #0084ff;
-      color: #fff;
-      padding: 15px;
-      text-align: center;
-      font-weight: bold;
-      font-size: 18px;
-    }
-
-    #messages {
-      flex: 1;
-      padding: 10px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .msg {
-      max-width: 70%;
-      padding: 10px 14px;
-      border-radius: 18px;
-      font-size: 14px;
-      line-height: 1.4;
-      word-wrap: break-word;
-      animation: fadeIn 0.3s ease;
-    }
-
-    .msg.me {
-      background: #0084ff;
-      color: #fff;
-      align-self: flex-end;
-      border-bottom-right-radius: 4px;
-    }
-
-    .msg.other {
-      background: #e4e6eb;
-      color: #000;
-      align-self: flex-start;
-      border-bottom-left-radius: 4px;
-    }
-
-    .chat-input {
-      display: flex;
-      padding: 10px;
-      border-top: 1px solid #ddd;
-      background: #fafafa;
-    }
-
-    .chat-input input {
-      flex: 1;
-      padding: 10px;
-      border: 1px solid #ccc;
-      border-radius: 20px;
-      outline: none;
-      font-size: 14px;
-    }
-
-    .chat-input button {
-      margin-left: 8px;
-      padding: 10px 16px;
-      border: none;
-      border-radius: 20px;
-      background: #0084ff;
-      color: #fff;
-      font-weight: bold;
-      cursor: pointer;
-      transition: 0.2s;
-    }
-
-    .chat-input button:hover {
-      background: #006bbd;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(5px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    body { margin: 0; font-family: sans-serif; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; }
+    .chat-container { width: 400px; height: 400px; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; margin-top: 10px; }
+    .chat-header { background: #0084ff; color: #fff; padding: 10px; text-align: center; }
+    #messages { flex: 1; padding: 10px; overflow-y: auto; }
+    .chat-input { display: flex; padding: 10px; background: #fafafa; }
+    .chat-input input { flex: 1; padding: 8px; border-radius: 20px; border: 1px solid #ccc; }
+    .chat-input button { margin-left: 8px; border: none; padding: 8px 12px; border-radius: 20px; background: #0084ff; color: white; cursor: pointer; }
+    .video-container { display: flex; gap: 10px; margin-top: 20px; }
+    video { width: 300px; border-radius: 8px; background: black; }
   </style>
 </head>
 <body>
+  <h2>💬 Chat + 🎥 Video Call</h2>
+
   <div class="chat-container">
-    <div class="chat-header">💬 Fancy Ephemeral Chat</div>
+    <div class="chat-header">Ephemeral Chat</div>
     <div id="messages"></div>
     <div class="chat-input">
-      <input id="input" autocomplete="off" placeholder="Type a message..." />
+      <input id="input" autocomplete="off" placeholder="Type a message...">
       <button id="sendBtn">Send</button>
     </div>
+  </div>
+
+  <button id="callBtn">Start Video Call</button>
+  <div class="video-container">
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
@@ -122,34 +40,87 @@
     const input = document.getElementById("input");
     const messages = document.getElementById("messages");
     const sendBtn = document.getElementById("sendBtn");
+    const callBtn = document.getElementById("callBtn");
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
 
-    // generate random username per session
     const username = "User" + Math.floor(Math.random() * 1000);
 
-    function appendMessage(msg, isMe) {
+    function appendMessage(msg) {
       const div = document.createElement("div");
-      div.classList.add("msg");
-      div.classList.add(isMe ? "me" : "other");
       div.textContent = msg;
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
     }
 
+    // Chat
     sendBtn.onclick = () => {
       if (input.value) {
         socket.emit("chat message", { user: username, text: input.value });
-        appendMessage("Me: " + input.value, true);
+        appendMessage("Me: " + input.value);
         input.value = "";
       }
     };
 
-    input.addEventListener("keypress", (e) => {
-      if (e.key === "Enter") sendBtn.click();
+    socket.on("chat message", (data) => {
+      if (data.user !== username) appendMessage(data.user + ": " + data.text);
     });
 
-    socket.on("chat message", (data) => {
-      if (data.user !== username) {
-        appendMessage(data.user + ": " + data.text, false);
+    // Video Call (WebRTC)
+    let localStream;
+    let peerConnection;
+    const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    callBtn.onclick = async () => {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(config);
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      peerConnection.onicecandidate = ({ candidate }) => {
+        if (candidate) socket.emit("ice-candidate", candidate);
+      };
+
+      peerConnection.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.emit("offer", offer);
+    };
+
+    socket.on("offer", async (offer) => {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(config);
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      peerConnection.onicecandidate = ({ candidate }) => {
+        if (candidate) socket.emit("ice-candidate", candidate);
+      };
+
+      peerConnection.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      await peerConnection.setRemoteDescription(offer);
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.emit("answer", answer);
+    });
+
+    socket.on("answer", async (answer) => {
+      await peerConnection.setRemoteDescription(answer);
+    });
+
+    socket.on("ice-candidate", async (candidate) => {
+      try {
+        await peerConnection.addIceCandidate(candidate);
+      } catch (err) {
+        console.error("Error adding ice candidate", err);
       }
     });
   </script>
