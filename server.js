@@ -7,29 +7,21 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const CHAT_PASSWORD = process.env.CHAT_PASSWORD || "secret123"; // set your own
-
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
 io.on("connection", (socket) => {
-  const password = socket.handshake.query.password;
-  if (password !== CHAT_PASSWORD) {
-    socket.emit("auth_error", "Invalid password ❌");
-    socket.disconnect();
-    return;
-  }
+  console.log("User connected");
 
-  socket.emit("auth_success");
-  console.log("✅ user joined chat");
-
-  socket.on("chat message", (msg) => {
-    io.emit("chat message", msg);
+  socket.on("chat message", (data) => {
+    // data = { user, text }
+    // Broadcast to everyone except sender
+    socket.broadcast.emit("chat message", data);
   });
 
   socket.on("disconnect", () => {
-    console.log("user disconnected");
+    console.log("User disconnected");
   });
 });
 
