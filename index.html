@@ -1,129 +1,324 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Fancy Chat + Video 🚀</title>
+  <meta charset="utf-8" />
+  <title>HiFi Video Call + Background Blur</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { margin: 0; font-family: sans-serif; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; }
-    .chat-container { width: 400px; height: 400px; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; margin-top: 10px; }
-    .chat-header { background: #0084ff; color: #fff; padding: 10px; text-align: center; }
-    #messages { flex: 1; padding: 10px; overflow-y: auto; }
-    .chat-input { display: flex; padding: 10px; background: #fafafa; }
-    .chat-input input { flex: 1; padding: 8px; border-radius: 20px; border: 1px solid #ccc; }
-    .chat-input button { margin-left: 8px; border: none; padding: 8px 12px; border-radius: 20px; background: #0084ff; color: white; cursor: pointer; }
-    .video-container { display: flex; gap: 10px; margin-top: 20px; }
-    video { width: 300px; border-radius: 8px; background: black; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; background:#f0f2f5; margin:0; display:flex; gap:20px; padding:20px; flex-wrap:wrap; }
+    .panel { background:#fff; border-radius:10px; padding:12px; box-shadow:0 6px 24px rgba(0,0,0,0.08); }
+    .video-grid { display:flex; gap:12px; flex-wrap:wrap; }
+    video, canvas { background:#000; border-radius:8px; width:360px; height:270px; object-fit:cover; }
+    .controls { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+    label { font-size:14px; }
+    input[type=range] { width:140px; }
+    button { padding:8px 12px; border-radius:8px; border:none; background:#0066ff; color:#fff; cursor:pointer; }
+    button.secondary { background:#e6eefc; color:#0066ff; }
+    .chat { width:360px; height:400px; display:flex; flex-direction:column; }
+    #messages { flex:1; overflow:auto; padding:8px; border:1px solid #eee; border-radius:8px; margin-bottom:8px; }
+    #messages div { margin-bottom:6px; }
   </style>
+
+  <!-- TensorFlow.js + BodyPix -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.14.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.2.0/dist/body-pix.min.js"></script>
+
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-  <h2>💬 Chat + 🎥 Video Call</h2>
+  <div class="panel">
+    <div style="font-weight:600">HiFi Video Call</div>
+    <div class="video-grid" style="margin-top:8px;">
+      <!-- We show local canvas (composited) and remote video -->
+      <canvas id="localCanvas" width="640" height="480" style="width:360px;height:270px"></canvas>
+      <video id="remoteVideo" autoplay playsinline></video>
+    </div>
 
-  <div class="chat-container">
-    <div class="chat-header">Ephemeral Chat</div>
-    <div id="messages"></div>
-    <div class="chat-input">
-      <input id="input" autocomplete="off" placeholder="Type a message...">
-      <button id="sendBtn">Send</button>
+    <div class="controls">
+      <label>Resolution:
+        <select id="resolution">
+          <option value="hd">1280x720 (HD)</option>
+          <option value="vga">640x480 (VGA)</option>
+          <option value="low">320x240 (Low)</option>
+        </select>
+      </label>
+
+      <label>Blur:
+        <input id="blurRange" type="range" min="0" max="25" value="6"/>
+      </label>
+
+      <button id="toggleBlur" class="secondary">Enable Blur</button>
+      <button id="bgImageBtn" class="secondary">Choose Background Image</button>
+      <input id="bgImageInput" type="file" accept="image/*" style="display:none" />
+
+      <button id="startCall">Start Call</button>
+      <button id="endCall" style="display:none" class="secondary">End Call</button>
+    </div>
+    <div style="margin-top:8px; font-size:12px; color:#444">
+      <strong>Notes:</strong> Blur runs locally in the browser using BodyPix (person segmentation). For best performance choose <em>VGA</em> or <em>Low</em>. Toggle blur to enable/disable.
     </div>
   </div>
 
-  <button id="callBtn">Start Video Call</button>
-  <div class="video-container">
-    <video id="localVideo" autoplay muted></video>
-    <video id="remoteVideo" autoplay></video>
+  <div class="panel chat">
+    <div style="font-weight:600">Chat</div>
+    <div id="messages"></div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <input id="chatInput" style="flex:1; padding:8px; border-radius:6px; border:1px solid #ddd" placeholder="Type message"/>
+      <button id="sendChat">Send</button>
+    </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script>
-    const socket = io();
-    const input = document.getElementById("input");
-    const messages = document.getElementById("messages");
-    const sendBtn = document.getElementById("sendBtn");
-    const callBtn = document.getElementById("callBtn");
-    const localVideo = document.getElementById("localVideo");
-    const remoteVideo = document.getElementById("remoteVideo");
+<script>
+(async () => {
+  // --- Config & elements ---
+  const socket = io();
+  const localCanvas = document.getElementById('localCanvas');
+  const ctx = localCanvas.getContext('2d');
+  const remoteVideo = document.getElementById('remoteVideo');
+  const startCallBtn = document.getElementById('startCall');
+  const endCallBtn = document.getElementById('endCall');
+  const toggleBlurBtn = document.getElementById('toggleBlur');
+  const blurRange = document.getElementById('blurRange');
+  const resolutionSel = document.getElementById('resolution');
+  const bgImageBtn = document.getElementById('bgImageBtn');
+  const bgImageInput = document.getElementById('bgImageInput');
+  const messagesDiv = document.getElementById('messages');
+  const chatInput = document.getElementById('chatInput');
+  const sendChat = document.getElementById('sendChat');
 
-    const username = "User" + Math.floor(Math.random() * 1000);
+  let localStream = null;
+  let pc = null;
+  let canvasStream = null;
+  let bodyPixNet = null;
+  let segmentation = null;
+  let blurEnabled = false;
+  let bgImg = null;
+  const username = 'User' + Math.floor(Math.random()*1000);
 
-    function appendMessage(msg) {
-      const div = document.createElement("div");
-      div.textContent = msg;
-      messages.appendChild(div);
-      messages.scrollTop = messages.scrollHeight;
+  // Chat handlers
+  sendChat.onclick = () => {
+    const v = chatInput.value.trim(); if(!v) return;
+    appendChat('Me: ' + v);
+    socket.emit('chat message', {user: username, text: v});
+    chatInput.value = '';
+  };
+  socket.on('chat message', d => {
+    appendChat((d.user||'Anon') + ': ' + d.text);
+  });
+  function appendChat(t){ const el = document.createElement('div'); el.textContent = t; messagesDiv.appendChild(el); messagesDiv.scrollTop = messagesDiv.scrollHeight; }
+
+  // Load BodyPix model (lightweight settings)
+  async function loadBodyPix(){
+    if(bodyPixNet) return;
+    // Use lightweight MobileNet with multiplier 0.5 for speed
+    bodyPixNet = await bodyPix.load({
+      architecture: 'MobileNetV1',
+      outputStride: 16,
+      multiplier: 0.50, // 0.50 faster, 0.75 or 1.0 better quality
+      quantBytes: 2
+    });
+    console.log('BodyPix loaded');
+  }
+
+  // Utility: choose constraints based on resolution
+  function constraintsFor(resKey){
+    if(resKey === 'hd') return { video: { width:1280, height:720, frameRate: 24 }, audio: true };
+    if(resKey === 'vga') return { video: { width:640, height:480, frameRate: 24 }, audio: true };
+    return { video: { width:320, height:240, frameRate: 15 }, audio: true };
+  }
+
+  // Start local capture + processing loop
+  async function startLocalCapture(){
+    const constraints = constraintsFor(resolutionSel.value);
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    // create canvas sized to video
+    const videoTrack = localStream.getVideoTracks()[0];
+    const settings = videoTrack.getSettings();
+    localCanvas.width = settings.width || 640;
+    localCanvas.height = settings.height || 480;
+
+    // start bodypix if blur enabled
+    if(blurEnabled) await loadBodyPix();
+
+    // create canvas capture stream to send to peer
+    canvasStream = localCanvas.captureStream(settings.frameRate || 24);
+    // include audio track from original stream
+    const audioTrack = localStream.getAudioTracks()[0];
+    if(audioTrack) canvasStream.addTrack(audioTrack);
+
+    // processing loop (draw to canvas)
+    const videoEl = document.createElement('video');
+    videoEl.srcObject = localStream;
+    videoEl.play();
+
+    async function renderLoop(){
+      // draw original frame to an offscreen canvas first (videoEl -> localCanvas with processing)
+      if(blurEnabled && bodyPixNet){
+        // segmentation at lower size for speed
+        const segmentationConfig = { internalResolution: 'medium', segmentationThreshold: 0.7 };
+        segmentation = await bodyPixNet.segmentPerson(videoEl, segmentationConfig);
+        // create blurred background
+        // draw background (image or blurred version)
+        if(bgImg){
+          // draw bg image scaled
+          ctx.drawImage(bgImg, 0, 0, localCanvas.width, localCanvas.height);
+        } else {
+          // draw original frame blurred: draw to temp, apply blur
+          // simple approach: draw original then use canvas filter blur for background
+          ctx.filter = `blur(${blurRange.value}px)`;
+          ctx.drawImage(videoEl, 0, 0, localCanvas.width, localCanvas.height);
+          ctx.filter = 'none';
+        }
+        // draw person on top by using mask
+        // get image data and mask
+        const mask = bodyPix.toMask(segmentation);
+        // draw original video
+        // draw original video into temp then composite using mask
+        // simpler and faster: use globalCompositeOperation
+        // draw original video
+        ctx.globalCompositeOperation = 'destination-over';
+        // draw person from video
+        // create an offscreen canvas for person
+        const tmp = document.createElement('canvas');
+        tmp.width = localCanvas.width; tmp.height = localCanvas.height;
+        const tctx = tmp.getContext('2d');
+        tctx.drawImage(videoEl, 0, 0, tmp.width, tmp.height);
+        // apply mask: set alpha from mask
+        const maskData = mask.data; // Uint8ClampedArray: RGBA
+        const imgData = tctx.getImageData(0,0,tmp.width,tmp.height);
+        const d = imgData.data;
+        // apply mask alpha (mask.data: r channel indicates person)
+        for(let i=0;i<d.length;i+=4){
+          const maskAlpha = maskData[i]; // 0..255
+          d[i+3] = maskAlpha; // set alpha
+        }
+        tctx.putImageData(imgData, 0, 0);
+        // draw person (with alpha) on top of blurred background
+        ctx.drawImage(tmp, 0, 0, localCanvas.width, localCanvas.height);
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        // no blur -> direct draw
+        ctx.drawImage(videoEl, 0, 0, localCanvas.width, localCanvas.height);
+      }
+      requestAnimationFrame(renderLoop);
+    }
+    renderLoop();
+  }
+
+  // --- WebRTC peer connection helpers ---
+  const pcConfig = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      // add TURN server here in production
+      // { urls: "turn:your.turn.server", username: "...", credential: "..." }
+    ]
+  };
+
+  function createPeerConnection() {
+    pc = new RTCPeerConnection(pcConfig);
+
+    pc.ontrack = (evt) => {
+      remoteVideo.srcObject = evt.streams[0];
+    };
+
+    pc.onicecandidate = (ev) => {
+      if(ev.candidate) socket.emit('ice-candidate', ev.candidate);
+    };
+
+    // If we already have canvasStream, add tracks
+    if(canvasStream){
+      canvasStream.getTracks().forEach(t => pc.addTrack(t, canvasStream));
+    }
+  }
+
+  // signaling
+  socket.on('offer', async (offer) => {
+    console.log('Received offer');
+    if(!localStream) await startLocalCapture();
+    createPeerConnection();
+    // add tracks if not added
+    if(!canvasStream) {
+      canvasStream = localCanvas.captureStream(24);
+      const audio = localStream.getAudioTracks()[0];
+      if(audio) canvasStream.addTrack(audio);
+    }
+    canvasStream.getTracks().forEach(t => pc.addTrack(t, canvasStream));
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('answer', answer);
+    endCallBtn.style.display = 'inline-block';
+  });
+
+  socket.on('answer', async (answer) => {
+    console.log('Received answer');
+    await pc.setRemoteDescription(answer);
+  });
+
+  socket.on('ice-candidate', async (candidate) => {
+    try{
+      await pc.addIceCandidate(candidate);
+    }catch(e){
+      console.warn('Failed to add ICE candidate', e);
+    }
+  });
+
+  // User clicks start -> create offer
+  startCallBtn.onclick = async () => {
+    // prepare local
+    if(!localStream) await startLocalCapture();
+    if(!canvasStream) {
+      canvasStream = localCanvas.captureStream(24);
+      const audio = localStream.getAudioTracks()[0];
+      if(audio) canvasStream.addTrack(audio);
     }
 
-    // Chat
-    sendBtn.onclick = () => {
-      if (input.value) {
-        socket.emit("chat message", { user: username, text: input.value });
-        appendMessage("Me: " + input.value);
-        input.value = "";
-      }
-    };
+    createPeerConnection();
+    canvasStream.getTracks().forEach(t => pc.addTrack(t, canvasStream));
 
-    socket.on("chat message", (data) => {
-      if (data.user !== username) appendMessage(data.user + ": " + data.text);
-    });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit('offer', offer);
+    endCallBtn.style.display = 'inline-block';
+  };
 
-    // Video Call (WebRTC)
-    let localStream;
-    let peerConnection;
-    const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  endCallBtn.onclick = () => {
+    if(pc){ pc.close(); pc = null; }
+    if(localStream){ localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+    if(canvasStream){ canvasStream.getTracks().forEach(t => t.stop()); canvasStream = null; }
+    ctx.clearRect(0,0,localCanvas.width, localCanvas.height);
+    endCallBtn.style.display = 'none';
+  };
 
-    callBtn.onclick = async () => {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localVideo.srcObject = localStream;
+  // controls
+  toggleBlurBtn.onclick = async () => {
+    blurEnabled = !blurEnabled;
+    toggleBlurBtn.textContent = blurEnabled ? 'Disable Blur' : 'Enable Blur';
+    if(blurEnabled && !bodyPixNet) await loadBodyPix();
+  };
 
-      peerConnection = new RTCPeerConnection(config);
-      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+  bgImageBtn.onclick = () => bgImageInput.click();
+  bgImageInput.onchange = (ev) => {
+    const file = ev.target.files[0];
+    if(!file) return;
+    const img = new Image();
+    img.onload = () => { bgImg = img; };
+    img.src = URL.createObjectURL(file);
+  };
 
-      peerConnection.onicecandidate = ({ candidate }) => {
-        if (candidate) socket.emit("ice-candidate", candidate);
-      };
+  // load lightweight bodypix on demand
+  async function loadBodyPix(){
+    appendChat('Loading segmentation model (may take a few seconds)...');
+    await new Promise(resolve => setTimeout(resolve, 50)); // allow UI update
+    await bodyPix.load({ architecture:'MobileNetV1', outputStride:16, multiplier:0.5, quantBytes: 2 })
+      .then(net => { bodyPixNet = net; appendChat('Segmentation ready'); })
+      .catch(e => { appendChat('Failed to load BodyPix: ' + e.message); console.error(e); });
+  }
 
-      peerConnection.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      socket.emit("offer", offer);
-    };
-
-    socket.on("offer", async (offer) => {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localVideo.srcObject = localStream;
-
-      peerConnection = new RTCPeerConnection(config);
-      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-      peerConnection.onicecandidate = ({ candidate }) => {
-        if (candidate) socket.emit("ice-candidate", candidate);
-      };
-
-      peerConnection.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      await peerConnection.setRemoteDescription(offer);
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      socket.emit("answer", answer);
-    });
-
-    socket.on("answer", async (answer) => {
-      await peerConnection.setRemoteDescription(answer);
-    });
-
-    socket.on("ice-candidate", async (candidate) => {
-      try {
-        await peerConnection.addIceCandidate(candidate);
-      } catch (err) {
-        console.error("Error adding ice candidate", err);
-      }
-    });
-  </script>
+  // UX: warn when someone else joins? We keep simple: last offer wins / P2P
+  socket.on('connect', () => appendChat('Connected to signaling server as ' + socket.id));
+})();
+</script>
 </body>
 </html>
-
