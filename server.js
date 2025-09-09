@@ -7,22 +7,30 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Serve React build
-app.use(express.static(path.join(__dirname, "build")));
+const CHAT_PASSWORD = process.env.CHAT_PASSWORD || "secret123"; // set your own
 
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  const password = socket.handshake.query.password;
+  if (password !== CHAT_PASSWORD) {
+    socket.emit("auth_error", "Invalid password ❌");
+    socket.disconnect();
+    return;
+  }
 
-  socket.on("chat message", (msg) => socket.broadcast.emit("chat message", msg));
-  socket.on("offer", (offer) => socket.broadcast.emit("offer", offer));
-  socket.on("answer", (answer) => socket.broadcast.emit("answer", answer));
-  socket.on("ice-candidate", (candidate) => socket.broadcast.emit("ice-candidate", candidate));
+  socket.emit("auth_success");
+  console.log("✅ user joined chat");
 
-  socket.on("disconnect", () => console.log("User disconnected:", socket.id));
+  socket.on("chat message", (msg) => {
+    io.emit("chat message", msg);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("user disconnected");
+  });
 });
 
 const PORT = process.env.PORT || 3000;
