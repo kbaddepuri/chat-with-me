@@ -194,6 +194,11 @@
     </div>
     <br />
     <button id="callBtn">Start Call</button>
+    <br /><br />
+    <div style="text-align: left; font-size: 12px; color: #666;">
+      <strong>Debug Info:</strong><br />
+      <div id="debugInfo">Loading...</div>
+    </div>
   </div>
 
   <!-- Socket.IO client -->
@@ -248,6 +253,8 @@
     let inCall = false;
     let isInitiator = false;
     let pendingIceCandidates = [];
+    let connectionRetryCount = 0;
+    let maxRetries = 3;
 
     // Check if running on HTTPS (required for WebRTC in production)
     function checkHTTPS() {
@@ -269,6 +276,58 @@
       return true;
     }
 
+    // Debug connection info
+    function logConnectionInfo() {
+      console.log('🔍 Connection Debug Info:');
+      console.log('  - Protocol:', location.protocol);
+      console.log('  - Hostname:', location.hostname);
+      console.log('  - User Agent:', navigator.userAgent);
+      console.log('  - WebRTC Support:', !!navigator.mediaDevices);
+      console.log('  - RTCPeerConnection Support:', !!window.RTCPeerConnection);
+      console.log('  - Socket.IO Connected:', socket.connected);
+      
+      // Update debug panel
+      updateDebugInfo();
+    }
+
+    // Update debug info panel
+    function updateDebugInfo() {
+      const debugEl = document.getElementById('debugInfo');
+      if (debugEl) {
+        debugEl.innerHTML = `
+          Protocol: ${location.protocol}<br/>
+          Hostname: ${location.hostname}<br/>
+          WebRTC: ${!!navigator.mediaDevices ? '✅' : '❌'}<br/>
+          Socket.IO: ${socket.connected ? '✅' : '❌'}<br/>
+          Connection: ${pc ? pc.connectionState : 'Not started'}<br/>
+          ICE State: ${pc ? pc.iceConnectionState : 'Not started'}<br/>
+          Retry Count: ${connectionRetryCount}/${maxRetries}
+        `;
+      }
+    }
+
+    // Retry connection
+    function retryConnection() {
+      if (connectionRetryCount < maxRetries) {
+        connectionRetryCount++;
+        console.log(`🔄 Retrying connection (attempt ${connectionRetryCount}/${maxRetries})...`);
+        updateConnectionStatus(`Retrying... (${connectionRetryCount}/${maxRetries})`, "warning");
+        
+        setTimeout(() => {
+          if (isInitiator) {
+            startCall();
+          } else {
+            // For responder, we need to wait for a new offer
+            console.log("⏳ Waiting for new offer...");
+          }
+        }, 2000 * connectionRetryCount); // Exponential backoff
+      } else {
+        console.error('❌ Max retries reached. Connection failed.');
+        updateConnectionStatus("Connection failed", "error");
+        alert('Unable to establish connection after multiple attempts. Please check your network and try again.');
+      }
+    }
+
     async function startCall() {
       try {
         // Check prerequisites
@@ -276,19 +335,26 @@
           return;
         }
 
+        // Log debug info
+        logConnectionInfo();
+
         console.log("🎬 Starting call as initiator...");
         console.log("🌐 Protocol:", location.protocol);
         console.log("🏠 Hostname:", location.hostname);
         isInitiator = true;
         pendingIceCandidates = [];
+        connectionRetryCount = 0; // Reset retry count
         
         pc = new RTCPeerConnection({
           iceServers: [
+            // Google STUN servers
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:stun3.l.google.com:19302' },
             { urls: 'stun:stun4.l.google.com:19302' },
+            
+            // Additional STUN servers
             { urls: 'stun:stun.ekiga.net' },
             { urls: 'stun:stun.ideasip.com' },
             { urls: 'stun:stun.schlund.de' },
@@ -303,9 +369,29 @@
             { urls: 'stun:stun.radiojar.com' },
             { urls: 'stun:stun.sonetel.com' },
             { urls: 'stun:stun.voipgate.com' },
-            { urls: 'stun:stun.voys.nl' }
+            { urls: 'stun:stun.voys.nl' },
+            
+            // Free TURN servers (for NAT traversal)
+            {
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            }
           ],
-          iceCandidatePoolSize: 10
+          iceCandidatePoolSize: 10,
+          iceTransportPolicy: 'all',
+          bundlePolicy: 'max-bundle',
+          rtcpMuxPolicy: 'require'
         });
 
         // Set up event handlers BEFORE adding tracks
@@ -325,7 +411,7 @@
         };
 
         pc.oniceconnectionstatechange = () => {
-          console.log('ICE connection state:', pc.iceConnectionState);
+          console.log('🧊 ICE connection state:', pc.iceConnectionState);
           updateConnectionStatus(pc.iceConnectionState, 
             pc.iceConnectionState === 'connected' ? 'success' : 
             pc.iceConnectionState === 'failed' ? 'error' : 'warning');
@@ -333,15 +419,38 @@
           if (pc.iceConnectionState === 'failed') {
             console.log("❌ ICE connection failed, attempting restart...");
             pc.restartIce();
+            // Also try retry mechanism
+            setTimeout(() => {
+              if (pc.iceConnectionState === 'failed') {
+                retryConnection();
+              }
+            }, 5000);
+          } else if (pc.iceConnectionState === 'connected') {
+            console.log("✅ ICE connection established successfully!");
+            connectionRetryCount = 0; // Reset retry count on success
           }
         };
 
         pc.onconnectionstatechange = () => {
-          console.log('Connection state:', pc.connectionState);
+          console.log('🔗 Connection state:', pc.connectionState);
           if (pc.connectionState === 'failed') {
             console.log("❌ Connection failed");
             updateConnectionStatus("Connection failed", "error");
+          } else if (pc.connectionState === 'connected') {
+            console.log("✅ Peer connection established!");
           }
+        };
+
+        pc.onicegatheringstatechange = () => {
+          console.log('🧊 ICE gathering state:', pc.iceGatheringState);
+        };
+
+        pc.onsignalingstatechange = () => {
+          console.log('📡 Signaling state:', pc.signalingState);
+        };
+
+        pc.onicecandidateerror = (event) => {
+          console.error('❌ ICE candidate error:', event);
         };
 
         // Get local stream
@@ -393,6 +502,7 @@
       inCall = false;
       isInitiator = false;
       pendingIceCandidates = [];
+      connectionRetryCount = 0;
       callBtn.textContent = "Start Call";
       callBtn.classList.remove("active");
       updateConnectionStatus("Disconnected", "default");
@@ -450,11 +560,14 @@
         
         pc = new RTCPeerConnection({
           iceServers: [
+            // Google STUN servers
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:stun3.l.google.com:19302' },
             { urls: 'stun:stun4.l.google.com:19302' },
+            
+            // Additional STUN servers
             { urls: 'stun:stun.ekiga.net' },
             { urls: 'stun:stun.ideasip.com' },
             { urls: 'stun:stun.schlund.de' },
@@ -469,9 +582,29 @@
             { urls: 'stun:stun.radiojar.com' },
             { urls: 'stun:stun.sonetel.com' },
             { urls: 'stun:stun.voipgate.com' },
-            { urls: 'stun:stun.voys.nl' }
+            { urls: 'stun:stun.voys.nl' },
+            
+            // Free TURN servers (for NAT traversal)
+            {
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+              username: 'openrelayproject',
+              credential: 'openrelayproject'
+            }
           ],
-          iceCandidatePoolSize: 10
+          iceCandidatePoolSize: 10,
+          iceTransportPolicy: 'all',
+          bundlePolicy: 'max-bundle',
+          rtcpMuxPolicy: 'require'
         });
 
         // Set up event handlers BEFORE adding tracks
@@ -491,7 +624,7 @@
         };
 
         pc.oniceconnectionstatechange = () => {
-          console.log('ICE connection state:', pc.iceConnectionState);
+          console.log('🧊 ICE connection state:', pc.iceConnectionState);
           updateConnectionStatus(pc.iceConnectionState, 
             pc.iceConnectionState === 'connected' ? 'success' : 
             pc.iceConnectionState === 'failed' ? 'error' : 'warning');
@@ -499,15 +632,38 @@
           if (pc.iceConnectionState === 'failed') {
             console.log("❌ ICE connection failed, attempting restart...");
             pc.restartIce();
+            // Also try retry mechanism
+            setTimeout(() => {
+              if (pc.iceConnectionState === 'failed') {
+                retryConnection();
+              }
+            }, 5000);
+          } else if (pc.iceConnectionState === 'connected') {
+            console.log("✅ ICE connection established successfully!");
+            connectionRetryCount = 0; // Reset retry count on success
           }
         };
 
         pc.onconnectionstatechange = () => {
-          console.log('Connection state:', pc.connectionState);
+          console.log('🔗 Connection state:', pc.connectionState);
           if (pc.connectionState === 'failed') {
             console.log("❌ Connection failed");
             updateConnectionStatus("Connection failed", "error");
+          } else if (pc.connectionState === 'connected') {
+            console.log("✅ Peer connection established!");
           }
+        };
+
+        pc.onicegatheringstatechange = () => {
+          console.log('🧊 ICE gathering state:', pc.iceGatheringState);
+        };
+
+        pc.onsignalingstatechange = () => {
+          console.log('📡 Signaling state:', pc.signalingState);
+        };
+
+        pc.onicecandidateerror = (event) => {
+          console.error('❌ ICE candidate error:', event);
         };
 
         // Get local stream
@@ -630,6 +786,26 @@
         ? "Shrink"
         : "Enlarge";
     };
+
+    // Initialize debug info and update periodically
+    updateDebugInfo();
+    setInterval(updateDebugInfo, 2000);
+
+    // Socket connection monitoring
+    socket.on('connect', () => {
+      console.log('🔌 Socket.IO connected');
+      updateDebugInfo();
+    });
+
+    socket.on('disconnect', () => {
+      console.log('🔌 Socket.IO disconnected');
+      updateDebugInfo();
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('❌ Socket.IO connection error:', error);
+      updateDebugInfo();
+    });
 
   </script>
 </body>
