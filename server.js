@@ -23,7 +23,12 @@ io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
   socket.on("chat message", (msg) => {
-    io.emit("chat message", msg);
+    // Add server timestamp if not provided by client
+    const messageWithTimestamp = {
+      ...msg,
+      timestamp: msg.timestamp || new Date().toISOString()
+    };
+    io.emit("chat message", messageWithTimestamp);
   });
 
   // WebRTC signaling

@@ -60,6 +60,18 @@
       line-height: 1.4;
       word-wrap: break-word;
       animation: fadeIn 0.3s ease;
+      position: relative;
+    }
+
+    .msg-timestamp {
+      font-size: 10px;
+      opacity: 0.7;
+      margin-top: 4px;
+      text-align: right;
+    }
+
+    .msg.other .msg-timestamp {
+      text-align: left;
     }
 
     .msg.me {
@@ -212,19 +224,32 @@
     // generate random username per session
     const username = "User" + Math.floor(Math.random() * 1000);
 
-    function appendMessage(msg, isMe) {
+    function appendMessage(msg, isMe, timestamp = null) {
       const div = document.createElement("div");
       div.classList.add("msg");
       div.classList.add(isMe ? "me" : "other");
-      div.textContent = msg;
+      
+      // Create message content
+      const messageContent = document.createElement("div");
+      messageContent.textContent = msg;
+      div.appendChild(messageContent);
+      
+      // Add timestamp
+      const timestampDiv = document.createElement("div");
+      timestampDiv.classList.add("msg-timestamp");
+      const timeToShow = timestamp ? new Date(timestamp) : new Date();
+      timestampDiv.textContent = timeToShow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      div.appendChild(timestampDiv);
+      
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
     }
 
     sendBtn.onclick = () => {
       if (input.value) {
-        socket.emit("chat message", { user: username, text: input.value });
-        appendMessage("Me: " + input.value, true);
+        const timestamp = new Date().toISOString();
+        socket.emit("chat message", { user: username, text: input.value, timestamp: timestamp });
+        appendMessage("Me: " + input.value, true, timestamp);
         input.value = "";
       }
     };
@@ -235,7 +260,7 @@
 
     socket.on("chat message", (data) => {
       if (data.user !== username) {
-        appendMessage(data.user + ": " + data.text, false);
+        appendMessage(data.user + ": " + data.text, false, data.timestamp);
       }
     });
 
