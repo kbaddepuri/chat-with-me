@@ -246,10 +246,14 @@
     let pc;
     let localStream;
     let inCall = false;
+    let isInitiator = false;
+    let pendingIceCandidates = [];
 
     async function startCall() {
       try {
-        console.log("🎬 Starting call...");
+        console.log("🎬 Starting call as initiator...");
+        isInitiator = true;
+        pendingIceCandidates = [];
         
         pc = new RTCPeerConnection({
           iceServers: [
@@ -269,6 +273,8 @@
           if (event.candidate) {
             console.log("🧊 Sending ICE candidate");
             socket.emit("ice-candidate", event.candidate);
+          } else {
+            console.log("🧊 ICE gathering complete");
           }
         };
 
@@ -277,10 +283,19 @@
           updateConnectionStatus(pc.iceConnectionState, 
             pc.iceConnectionState === 'connected' ? 'success' : 
             pc.iceConnectionState === 'failed' ? 'error' : 'warning');
+            
+          if (pc.iceConnectionState === 'failed') {
+            console.log("❌ ICE connection failed, attempting restart...");
+            pc.restartIce();
+          }
         };
 
         pc.onconnectionstatechange = () => {
           console.log('Connection state:', pc.connectionState);
+          if (pc.connectionState === 'failed') {
+            console.log("❌ Connection failed");
+            updateConnectionStatus("Connection failed", "error");
+          }
         };
 
         // Get local stream
@@ -330,6 +345,8 @@
       remoteVideo.srcObject = null;
 
       inCall = false;
+      isInitiator = false;
+      pendingIceCandidates = [];
       callBtn.textContent = "Start Call";
       callBtn.classList.remove("active");
       updateConnectionStatus("Disconnected", "default");
@@ -374,7 +391,9 @@
 
     socket.on("offer", async (offer) => {
       try {
-        console.log("📞 Received offer, accepting call...");
+        console.log("📞 Received offer, accepting call as responder...");
+        isInitiator = false;
+        pendingIceCandidates = [];
         
         pc = new RTCPeerConnection({
           iceServers: [
@@ -394,6 +413,8 @@
           if (event.candidate) {
             console.log("🧊 Sending ICE candidate");
             socket.emit("ice-candidate", event.candidate);
+          } else {
+            console.log("🧊 ICE gathering complete");
           }
         };
 
@@ -402,10 +423,19 @@
           updateConnectionStatus(pc.iceConnectionState, 
             pc.iceConnectionState === 'connected' ? 'success' : 
             pc.iceConnectionState === 'failed' ? 'error' : 'warning');
+            
+          if (pc.iceConnectionState === 'failed') {
+            console.log("❌ ICE connection failed, attempting restart...");
+            pc.restartIce();
+          }
         };
 
         pc.onconnectionstatechange = () => {
           console.log('Connection state:', pc.connectionState);
+          if (pc.connectionState === 'failed') {
+            console.log("❌ Connection failed");
+            updateConnectionStatus("Connection failed", "error");
+          }
         };
 
         // Get local stream
@@ -425,6 +455,17 @@
         // Handle the offer
         console.log("📥 Setting remote description...");
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        
+        // Process any pending ICE candidates
+        for (const candidate of pendingIceCandidates) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log("🧊 Added pending ICE candidate");
+          } catch (err) {
+            console.log("⚠️ Could not add pending ICE candidate:", err);
+          }
+        }
+        pendingIceCandidates = [];
         
         console.log("📤 Creating answer...");
         const answer = await pc.createAnswer();
@@ -449,6 +490,18 @@
         console.log("📥 Received answer, setting remote description...");
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
         console.log("✅ Remote description set successfully");
+        
+        // Process any pending ICE candidates
+        for (const candidate of pendingIceCandidates) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log("🧊 Added pending ICE candidate");
+          } catch (err) {
+            console.log("⚠️ Could not add pending ICE candidate:", err);
+          }
+        }
+        pendingIceCandidates = [];
+        
       } catch (error) {
         console.error("❌ Error setting remote description:", error);
       }
@@ -461,7 +514,8 @@
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
           console.log("✅ ICE candidate added successfully");
         } else {
-          console.log("⚠️ Peer connection not ready for ICE candidate");
+          console.log("⚠️ Peer connection not ready for ICE candidate, storing for later");
+          pendingIceCandidates.push(candidate);
         }
       } catch (err) {
         console.error("❌ ICE candidate error:", err);
