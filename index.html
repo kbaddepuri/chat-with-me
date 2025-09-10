@@ -249,17 +249,63 @@
     let isInitiator = false;
     let pendingIceCandidates = [];
 
+    // Check if running on HTTPS (required for WebRTC in production)
+    function checkHTTPS() {
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        console.error('❌ WebRTC requires HTTPS in production!');
+        alert('WebRTC requires HTTPS in production. Please use HTTPS or localhost.');
+        return false;
+      }
+      return true;
+    }
+
+    // Check WebRTC support
+    function checkWebRTCSupport() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.error('❌ WebRTC not supported in this browser');
+        alert('WebRTC is not supported in this browser. Please use a modern browser.');
+        return false;
+      }
+      return true;
+    }
+
     async function startCall() {
       try {
+        // Check prerequisites
+        if (!checkHTTPS() || !checkWebRTCSupport()) {
+          return;
+        }
+
         console.log("🎬 Starting call as initiator...");
+        console.log("🌐 Protocol:", location.protocol);
+        console.log("🏠 Hostname:", location.hostname);
         isInitiator = true;
         pendingIceCandidates = [];
         
         pc = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            { urls: 'stun:stun.ekiga.net' },
+            { urls: 'stun:stun.ideasip.com' },
+            { urls: 'stun:stun.schlund.de' },
+            { urls: 'stun:stun.stunprotocol.org:3478' },
+            { urls: 'stun:stun.voiparound.com' },
+            { urls: 'stun:stun.voipbuster.com' },
+            { urls: 'stun:stun.voipstunt.com' },
+            { urls: 'stun:stun.counterpath.com' },
+            { urls: 'stun:stun.1und1.de' },
+            { urls: 'stun:stun.gmx.net' },
+            { urls: 'stun:stun.sipgate.net' },
+            { urls: 'stun:stun.radiojar.com' },
+            { urls: 'stun:stun.sonetel.com' },
+            { urls: 'stun:stun.voipgate.com' },
+            { urls: 'stun:stun.voys.nl' }
+          ],
+          iceCandidatePoolSize: 10
         });
 
         // Set up event handlers BEFORE adding tracks
@@ -391,15 +437,41 @@
 
     socket.on("offer", async (offer) => {
       try {
+        // Check prerequisites
+        if (!checkHTTPS() || !checkWebRTCSupport()) {
+          return;
+        }
+
         console.log("📞 Received offer, accepting call as responder...");
+        console.log("🌐 Protocol:", location.protocol);
+        console.log("🏠 Hostname:", location.hostname);
         isInitiator = false;
         pendingIceCandidates = [];
         
         pc = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            { urls: 'stun:stun.ekiga.net' },
+            { urls: 'stun:stun.ideasip.com' },
+            { urls: 'stun:stun.schlund.de' },
+            { urls: 'stun:stun.stunprotocol.org:3478' },
+            { urls: 'stun:stun.voiparound.com' },
+            { urls: 'stun:stun.voipbuster.com' },
+            { urls: 'stun:stun.voipstunt.com' },
+            { urls: 'stun:stun.counterpath.com' },
+            { urls: 'stun:stun.1und1.de' },
+            { urls: 'stun:stun.gmx.net' },
+            { urls: 'stun:stun.sipgate.net' },
+            { urls: 'stun:stun.radiojar.com' },
+            { urls: 'stun:stun.sonetel.com' },
+            { urls: 'stun:stun.voipgate.com' },
+            { urls: 'stun:stun.voys.nl' }
+          ],
+          iceCandidatePoolSize: 10
         });
 
         // Set up event handlers BEFORE adding tracks
