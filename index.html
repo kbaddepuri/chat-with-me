@@ -249,6 +249,8 @@
 
     async function startCall() {
       try {
+        console.log("🎬 Starting call...");
+        
         pc = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -256,47 +258,66 @@
           ]
         });
 
-        // Local stream
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        // Set up event handlers BEFORE adding tracks
+        pc.ontrack = (event) => {
+          console.log("📹 Received remote stream:", event.streams[0]);
+          remoteVideo.srcObject = event.streams[0];
+          updateConnectionStatus("Connected", "success");
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("🧊 Sending ICE candidate");
+            socket.emit("ice-candidate", event.candidate);
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          console.log('ICE connection state:', pc.iceConnectionState);
+          updateConnectionStatus(pc.iceConnectionState, 
+            pc.iceConnectionState === 'connected' ? 'success' : 
+            pc.iceConnectionState === 'failed' ? 'error' : 'warning');
+        };
+
+        pc.onconnectionstatechange = () => {
+          console.log('Connection state:', pc.connectionState);
+        };
+
+        // Get local stream
+        localStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: 640, height: 480 }, 
+          audio: true 
+        });
         localVideo.srcObject = localStream;
-        localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
-
-      // Remote stream
-      pc.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      // ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("ice-candidate", event.candidate);
-        }
-      };
-
-      // Connection state monitoring
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-      };
-
-      pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
-      };
+        
+        // Add tracks to peer connection
+        localStream.getTracks().forEach((track) => {
+          console.log("📤 Adding track:", track.kind);
+          pc.addTrack(track, localStream);
+        });
 
         // Create and send offer
+        console.log("📞 Creating offer...");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         socket.emit("offer", offer);
+        console.log("📤 Offer sent");
 
         inCall = true;
         callBtn.textContent = "Stop Call";
         callBtn.classList.add("active");
+        updateConnectionStatus("Calling...", "warning");
+        
       } catch (error) {
-        console.error("Error starting call:", error);
+        console.error("❌ Error starting call:", error);
         alert("Failed to start call. Please check your camera and microphone permissions.");
+        updateConnectionStatus("Call failed", "error");
       }
     }
 
     function stopCall() {
+      console.log("📴 Ending call...");
+      
       if (pc) {
         pc.close();
         pc = null;
@@ -311,7 +332,36 @@
       inCall = false;
       callBtn.textContent = "Start Call";
       callBtn.classList.remove("active");
+      updateConnectionStatus("Disconnected", "default");
       console.log("📴 Call ended");
+    }
+
+    function updateConnectionStatus(status, type) {
+      // Create or update status indicator
+      let statusEl = document.getElementById("connectionStatus");
+      if (!statusEl) {
+        statusEl = document.createElement("div");
+        statusEl.id = "connectionStatus";
+        statusEl.style.cssText = `
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          padding: 8px 16px;
+          border-radius: 20px;
+          font-size: 12px;
+          font-weight: bold;
+          z-index: 1000;
+          transition: all 0.3s ease;
+        `;
+        document.body.appendChild(statusEl);
+      }
+      
+      statusEl.textContent = status;
+      statusEl.style.background = 
+        type === 'success' ? '#28a745' :
+        type === 'error' ? '#dc3545' :
+        type === 'warning' ? '#ffc107' : '#6c757d';
+      statusEl.style.color = type === 'warning' ? '#000' : '#fff';
     }
 
     callBtn.onclick = () => {
@@ -324,6 +374,8 @@
 
     socket.on("offer", async (offer) => {
       try {
+        console.log("📞 Received offer, accepting call...");
+        
         pc = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -331,53 +383,88 @@
           ]
         });
 
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        // Set up event handlers BEFORE adding tracks
+        pc.ontrack = (event) => {
+          console.log("📹 Received remote stream:", event.streams[0]);
+          remoteVideo.srcObject = event.streams[0];
+          updateConnectionStatus("Connected", "success");
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log("🧊 Sending ICE candidate");
+            socket.emit("ice-candidate", event.candidate);
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          console.log('ICE connection state:', pc.iceConnectionState);
+          updateConnectionStatus(pc.iceConnectionState, 
+            pc.iceConnectionState === 'connected' ? 'success' : 
+            pc.iceConnectionState === 'failed' ? 'error' : 'warning');
+        };
+
+        pc.onconnectionstatechange = () => {
+          console.log('Connection state:', pc.connectionState);
+        };
+
+        // Get local stream
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: 640, height: 480 }, 
+          audio: true 
+        });
         localVideo.srcObject = stream;
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
         localStream = stream;
+        
+        // Add tracks to peer connection
+        stream.getTracks().forEach((track) => {
+          console.log("📤 Adding track:", track.kind);
+          pc.addTrack(track, stream);
+        });
 
-      pc.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("ice-candidate", event.candidate);
-        }
-      };
-
-      // Connection state monitoring
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-      };
-
-      pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
-      };
-
+        // Handle the offer
+        console.log("📥 Setting remote description...");
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        
+        console.log("📤 Creating answer...");
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("answer", answer);
+        console.log("📤 Answer sent");
 
         inCall = true;
         callBtn.textContent = "Stop Call";
         callBtn.classList.add("active");
+        updateConnectionStatus("Answering...", "warning");
+        
       } catch (error) {
-        console.error("Error handling offer:", error);
+        console.error("❌ Error handling offer:", error);
         alert("Failed to accept call. Please check your camera and microphone permissions.");
+        updateConnectionStatus("Call failed", "error");
       }
     });
 
     socket.on("answer", async (answer) => {
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      try {
+        console.log("📥 Received answer, setting remote description...");
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log("✅ Remote description set successfully");
+      } catch (error) {
+        console.error("❌ Error setting remote description:", error);
+      }
     });
 
     socket.on("ice-candidate", async (candidate) => {
       try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log("🧊 Received ICE candidate");
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          console.log("✅ ICE candidate added successfully");
+        } else {
+          console.log("⚠️ Peer connection not ready for ICE candidate");
+        }
       } catch (err) {
-        console.error("ICE error:", err);
+        console.error("❌ ICE candidate error:", err);
       }
     });
 
