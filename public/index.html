@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ephemeral Chat 🚀</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", sans-serif;
+      background: linear-gradient(135deg, #ece9e6, #ffffff);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .app-container {
+      display: flex;
+      width: 800px;
+      height: 640px;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+      overflow: hidden;
+    }
+    /* Sidebar */
+    .sidebar {
+      width: 200px;
+      background: #f7f9fc;
+      border-right: 1px solid #ddd;
+      display: flex;
+      flex-direction: column;
+    }
+    .sidebar-header {
+      background: linear-gradient(135deg, #0084ff, #00c6ff);
+      color: #fff;
+      padding: 12px;
+      text-align: center;
+      font-weight: 600;
+      font-size: 16px;
+    }
+    .group-list { flex: 1; padding: 8px; overflow-y: auto; }
+    .group-item {
+      padding: 10px 14px;
+      border-radius: 10px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+    }
+    .group-item:hover { background: #e3f2fd; }
+    .group-item.active { background: #0084ff; color: #fff; font-weight: 600; }
+    /* Chat */
+    .chat-container { flex: 1; display: flex; flex-direction: column; position: relative; }
+    .chat-header {
+      background: linear-gradient(135deg, #0084ff, #00c6ff);
+      color: #fff;
+      padding: 12px;
+      text-align: center;
+      font-weight: 600;
+      font-size: 16px;
+      position: relative;
+    }
+    .settings-btn {
+      position: absolute; right: 12px; top: 10px;
+      background: transparent; border: none; font-size: 18px;
+      cursor: pointer; color: #fff;
+    }
+    #groupLabel { margin-top: 4px; font-size: 13px; font-weight: 500; }
+    #messages {
+      flex: 1; padding: 16px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 12px;
+      background-color: #efeae2;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='%239c9c9c' fill-opacity='0.08'%3E%3Cpath d='M60 0L65 10H55zM0 60l10-5v10zM60 120l-5-10h10zM120 60l-10 5V55z'/%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3Ccircle cx='90' cy='90' r='2'/%3E%3Ccircle cx='30' cy='90' r='2'/%3E%3Ccircle cx='90' cy='30' r='2'/%3E%3C/g%3E%3C/svg%3E");
+      background-size: 120px 120px;
+    }
+    .msg-row { display: flex; align-items: flex-end; gap: 8px; }
+    .msg-row.me { justify-content: flex-end; }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; overflow: hidden; }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .msg {
+      max-width: 70%; padding: 10px 14px; border-radius: 18px;
+      font-size: 14px; line-height: 1.4;
+    }
+    .msg.me { background: linear-gradient(135deg,#0084ff,#00c6ff); color: #fff; border-bottom-right-radius: 6px; }
+    .msg.other { background: #fff; color: #333; border-bottom-left-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+    .msg-footer { font-size: 10px; opacity: 0.7; margin-top: 4px; display: flex; justify-content: space-between; }
+    .tick { font-size: 12px; margin-left: 6px; color: gray; }
+    .tick.read { color: #ff4da6; font-weight: 600; }
+    .typing-indicator { font-size: 12px; font-style: italic; color: #666; padding: 4px 12px; min-height: 18px; }
+    .chat-input { display: flex; flex-direction: column; padding: 10px 12px; border-top: 1px solid #eee; }
+    .chat-input-row { display: flex; }
+    .chat-input input { flex: 1; padding: 12px 14px; border: 1px solid #ddd; border-radius: 20px; font-size: 14px; }
+    .chat-input button { margin-left: 10px; padding: 12px 18px; border: none; border-radius: 20px; background: linear-gradient(135deg,#0084ff,#00c6ff); color: #fff; font-weight: 600; cursor: pointer; }
+    .toast {
+      position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
+      background: #0084ff; color: #fff; padding: 10px 18px; border-radius: 20px;
+      font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      opacity: 0; transition: 0.3s;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+    /* Modal */
+    .modal { display:none; position:fixed; top:0;left:0;width:100%;height:100%; background:rgba(0,0,0,0.4); justify-content:center; align-items:center; }
+    .modal-content { background:#fff; padding:20px; border-radius:12px; width:300px; box-shadow:0 6px 18px rgba(0,0,0,0.2); display:flex; flex-direction:column; gap:10px; text-align:center; }
+    #profilePreview { width:70px; height:70px; border-radius:50%; margin:10px auto; object-fit:cover; display:none; }
+    .avatar-gallery { display:flex; gap:8px; justify-content:center; margin-top:10px; }
+    .avatar-option { width:40px; height:40px; border-radius:50%; overflow:hidden; cursor:pointer; border:2px solid transparent; }
+    .avatar-option img { width:100%; height:100%; object-fit:cover; }
+    .avatar-option.selected { border-color:#0084ff; }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <div class="sidebar">
+      <div class="sidebar-header">Groups</div>
+      <div class="group-list">
+        <div class="group-item active" data-group="general"># General</div>
+        <div class="group-item" data-group="family"># Family</div>
+        <div class="group-item" data-group="work"># Work</div>
+        <div class="group-item" data-group="friends"># Friends</div>
+      </div>
+    </div>
+    <div class="chat-container">
+      <div class="chat-header">
+        💬 Ephemeral Chat
+        <button id="settingsBtn" class="settings-btn">⚙️</button>
+        <div id="groupLabel">📌 Group: general</div>
+      </div>
+      <div id="messages"></div>
+      <div class="chat-input">
+        <div id="typingIndicator" class="typing-indicator"></div>
+        <div class="chat-input-row">
+          <input id="input" placeholder="Type a message..."/>
+          <button id="sendBtn">Send</button>
+        </div>
+      </div>
+      <div id="toast" class="toast"></div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal">
+    <div class="modal-content">
+      <h3>👤 User Settings</h3>
+      <label>Alias:</label>
+      <input id="aliasInput" type="text"/>
+      <label>Profile Picture:</label>
+      <input id="profilePicInput" type="file" accept="image/*"/>
+      <img id="profilePreview"/>
+      <div class="avatar-gallery">
+        <div class="avatar-option"><img src="https://i.pravatar.cc/40?img=3"/></div>
+        <div class="avatar-option"><img src="https://i.pravatar.cc/40?img=5"/></div>
+        <div class="avatar-option"><img src="https://i.pravatar.cc/40?img=7"/></div>
+      </div>
+      <button id="saveAliasBtn">Save</button>
+      <button id="closeModalBtn">Close</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let username = "User" + Math.floor(Math.random()*1000);
+    let currentGroup = "general";
+    let profilePic = null;
+
+    const messages=document.getElementById("messages");
+    const input=document.getElementById("input");
+    const sendBtn=document.getElementById("sendBtn");
+    const typingIndicator=document.getElementById("typingIndicator");
+    const groupLabel=document.getElementById("groupLabel");
+    const modal=document.getElementById("settingsModal");
+
+    function showToast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2500);}
+
+    // Modal controls
+    document.getElementById("settingsBtn").onclick=()=>{modal.style.display="flex";document.getElementById("aliasInput").value=username;}
+    document.getElementById("closeModalBtn").onclick=()=>modal.style.display="none";
+    window.onclick=e=>{if(e.target===modal)modal.style.display="none";}
+
+    // Upload
+    document.getElementById("profilePicInput").onchange=e=>{
+      const file=e.target.files[0];if(file){const r=new FileReader();r.onload=ev=>{profilePic=ev.target.result;profilePreview.src=profilePic;profilePreview.style.display="block";};r.readAsDataURL(file);}
+    };
+    // Gallery
+    document.querySelectorAll(".avatar-option").forEach(opt=>{
+      opt.onclick=()=>{document.querySelectorAll(".avatar-option").forEach(el=>el.classList.remove("selected"));opt.classList.add("selected");profilePic=opt.querySelector("img").src;profilePreview.src=profilePic;profilePreview.style.display="block";}
+    });
+
+    // Save profile
+    document.getElementById("saveAliasBtn").onclick=()=>{
+      const val=document.getElementById("aliasInput").value.trim();if(val)username=val;
+      socket.emit("update profile",{alias:username,pic:profilePic});
+      showToast("✨ Profile updated");modal.style.display="none";
+    };
+
+    // Groups
+    document.querySelectorAll(".group-item").forEach(item=>{
+      item.onclick=()=>{document.querySelectorAll(".group-item").forEach(el=>el.classList.remove("active"));item.classList.add("active");currentGroup=item.dataset.group;socket.emit("join group",{group:currentGroup});groupLabel.textContent="📌 Group: "+currentGroup;messages.innerHTML="";};
+    });
+
+    function createAvatar(user,pic){const d=document.createElement("div");d.classList.add("avatar");if(pic){const i=document.createElement("img");i.src=pic;d.appendChild(i);}else{d.textContent=user.charAt(0).toUpperCase();d.style.background="#888";}return d;}
+
+    function appendMessage(user,text,isMe,time,id,pic){const row=document.createElement("div");row.classList.add("msg-row",isMe?"me":"other");if(!isMe)row.appendChild(createAvatar(user,pic));const msg=document.createElement("div");msg.classList.add("msg",isMe?"me":"other");msg.textContent=(isMe?"Me: ":user+": ")+text;const f=document.createElement("div");f.classList.add("msg-footer");const t=document.createElement("span");t.textContent=(time?new Date(time):new Date()).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});f.appendChild(t);if(isMe){const tick=document.createElement("span");tick.classList.add("tick");tick.textContent="✔";tick.id="tick-"+id;f.appendChild(tick);}msg.appendChild(f);row.appendChild(msg);if(isMe)row.appendChild(createAvatar(user,pic));messages.appendChild(row);messages.scrollTop=messages.scrollHeight;}
+
+    sendBtn.onclick=()=>{if(input.value){const ts=new Date().toISOString();const id=Date.now()+Math.random().toString(36).slice(2);socket.emit("chat message",{id,text:input.value,timestamp:ts,group:currentGroup});appendMessage(username,input.value,true,ts,id,profilePic);input.value="";socket.emit("stop typing",{group:currentGroup});}};
+    input.addEventListener("keypress",e=>{if(e.key==="Enter")sendBtn.click();});
+    let typingTimeout;input.addEventListener("input",()=>{socket.emit("typing",{group:currentGroup});clearTimeout(typingTimeout);typingTimeout=setTimeout(()=>socket.emit("stop typing",{group:currentGroup}),2000);});
+
+    socket.on("connect",()=>socket.emit("update profile",{alias:username,pic:profilePic}));
+    socket.on("chat message",data=>{if(data.group===currentGroup){const isMe=(data.alias===username);appendMessage(data.alias,data.text,isMe,data.timestamp,data.id,data.pic);if(!isMe)socket.emit("message read",{id:data.id,group:currentGroup});}});
+    socket.on("message read",id=>{const tick=document.getElementById("tick-"+id);if(tick){tick.textContent="✔✔";tick.classList.add("read");}});
+    socket.on("typing",u=>{if(u!==username)typingIndicator.textContent=`${u} is typing...`;});
+    socket.on("stop typing",u=>{if(u!==username)typingIndicator.textContent="";});
+  </script>
+</body>
+</html>
