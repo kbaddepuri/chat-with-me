@@ -10,20 +10,15 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// Serve static index.html
 app.use(express.static(__dirname));
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
   socket.on("chat message", (msg) => {
-    // Add server timestamp if not provided by client
     const messageWithTimestamp = {
       ...msg,
       timestamp: msg.timestamp || new Date().toISOString()
@@ -31,17 +26,16 @@ io.on("connection", (socket) => {
     io.emit("chat message", messageWithTimestamp);
   });
 
-  // WebRTC signaling
-  socket.on("offer", (offer) => {
-    socket.broadcast.emit("offer", offer);
+  socket.on("typing", (user) => {
+    socket.broadcast.emit("typing", user);
   });
 
-  socket.on("answer", (answer) => {
-    socket.broadcast.emit("answer", answer);
+  socket.on("stop typing", (user) => {
+    socket.broadcast.emit("stop typing", user);
   });
 
-  socket.on("ice-candidate", (candidate) => {
-    socket.broadcast.emit("ice-candidate", candidate);
+  socket.on("message read", (id) => {
+    socket.broadcast.emit("message read", id);
   });
 
   socket.on("disconnect", () => {
@@ -50,10 +44,7 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '0.0.0.0';
-
+const HOST = process.env.HOST || "0.0.0.0";
 server.listen(PORT, HOST, () => {
-  console.log(`🚀 Server running on ${HOST}:${PORT}`);
-  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔒 HTTPS required for WebRTC in production: ${process.env.NODE_ENV === 'production'}`);
+  console.log(`🚀 Server running on http://${HOST}:${PORT}`);
 });
