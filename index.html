@@ -424,7 +424,13 @@
   <div class="chat-container">
     <div class="chat-header">
       💬 Fancy Ephemeral Chat
-      <div id="partnerStatus" style="font-size:12px;font-weight:400;margin-top:6px;">Select a person to see their status</div>
+      <div id="partnerStatus" style="font-size:12px;font-weight:400;margin-top:6px;">Choose a person below</div>
+    </div>
+    <div id="contactBar" style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;background:#f7f9fc;border-bottom:1px solid #e2e6ea;">
+      <label for="peerSelect" style="font-size:12px;color:#555;font-weight:600;">CHAT WITH / VIDEO CALL</label>
+      <select id="peerSelect" aria-label="Choose someone to chat with or call" style="width:100%;padding:10px;border-radius:10px;border:1px solid #cbd5e1;background:white;">
+        <option value="">Waiting for people to come online…</option>
+      </select>
     </div>
     <div id="typingIndicator" aria-live="polite" style="min-height:18px;padding:4px 12px;color:#65676b;font-size:12px;"></div>
     <div id="messages"></div>
@@ -513,11 +519,10 @@
     const muteLocalBtn = document.getElementById("muteLocalBtn");
     const muteRemoteBtn = document.getElementById("muteRemoteBtn");
     const callArea = document.querySelector(".call-button-container");
-    const peerSelect = document.createElement("select");
-    peerSelect.setAttribute("aria-label", "Choose someone to call");
-    peerSelect.style.cssText = "max-width:190px;padding:10px;border-radius:12px;border:0;margin-right:8px;";
-    peerSelect.innerHTML = '<option value="">Choose a person…</option>';
-    callArea.prepend(peerSelect);
+    const peerSelect = document.getElementById("peerSelect");
+    const defaultPeerOption = new Option("Waiting for people to come online…", "");
+    peerSelect.replaceChildren(defaultPeerOption);
+    peerSelect.style.cssText = "width:100%;max-width:320px;padding:10px;border-radius:12px;border:0;margin:0 8px 8px 0;";
 
     const callStatus = document.createElement("p");
     callStatus.setAttribute("role", "status");
@@ -536,19 +541,24 @@
     const knownPeers = new Map();
     let typingTimer = null;
     let isTypingSent = false;
+    let typingTargetId = null;
 
-    socket.emit("register-user", username);
+    socket.on("connect", () => {
+      // Register again after reconnects because Socket.IO assigns a new socket ID.
+      socket.emit("register-user", username);
+    });
     socket.on("online-users", (users) => {
+      lastOnlineUsers = users;
       const selected = peerSelect.value;
       users.filter((u) => u.id !== socket.id).forEach((u) => knownPeers.set(u.id, u.name));
       peerSelect.replaceChildren(new Option("Choose a person…", ""));
       users.filter((u) => u.id !== socket.id).forEach((u) => {
-        peerSelect.add(new Option(u.name + " · Online", u.id));
+        peerSelect.add(new Option("🟢 " + u.name + " — Online", u.id));
       });
 
-      // Keep a previously selected person visible if they disconnect, so Offline is explicit.
+      // Keep the selected person visible after they disconnect.
       if (selected && !users.some((u) => u.id === selected) && knownPeers.has(selected)) {
-        peerSelect.add(new Option(knownPeers.get(selected) + " · Offline", selected));
+        peerSelect.add(new Option("⚪ " + knownPeers.get(selected) + " — Offline", selected));
       }
       if ([...peerSelect.options].some((o) => o.value === selected)) peerSelect.value = selected;
       updatePartnerStatus(users);
@@ -567,29 +577,34 @@
       if (!peer) typingIndicator.textContent = "";
     }
 
+    let lastOnlineUsers = [];
     peerSelect.addEventListener("change", () => {
       stopTyping();
       typingIndicator.textContent = "";
       updatePartnerStatus(lastOnlineUsers);
+      callStatus.textContent = peerSelect.value
+        ? "Selected " + (knownPeers.get(peerSelect.value) || "contact") + " for chat and calls."
+        : "Choose an online person first.";
     });
-    let lastOnlineUsers = [];
-    socket.on("online-users", (users) => { lastOnlineUsers = users; });
 
     function stopTyping() {
       if (typingTimer) clearTimeout(typingTimer);
       typingTimer = null;
-      if (isTypingSent && peerSelect.value) {
-        socket.emit("typing", { targetId: peerSelect.value, isTyping: false });
+      if (isTypingSent && typingTargetId) {
+        socket.emit("typing", { targetId: typingTargetId, isTyping: false });
       }
       isTypingSent = false;
+      typingTargetId = null;
     }
 
     input.addEventListener("input", () => {
       const targetId = peerSelect.value;
       if (!targetId) return;
+      if (isTypingSent && typingTargetId !== targetId) stopTyping();
       if (!isTypingSent) {
         socket.emit("typing", { targetId, isTyping: true });
         isTypingSent = true;
+        typingTargetId = targetId;
       }
       if (typingTimer) clearTimeout(typingTimer);
       typingTimer = setTimeout(stopTyping, 900);
