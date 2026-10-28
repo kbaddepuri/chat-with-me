@@ -611,7 +611,7 @@
     });
 
     function setStatus(message) { callStatus.textContent = message; }
-    function resetCallUi() {
+    function resetCallUi(message = "Ready to call") {
       inCall = false;
       isCaller = false;
       peerId = null;
@@ -620,7 +620,7 @@
       callBtn.classList.remove("active");
       localVideo.srcObject = null;
       remoteVideo.srcObject = null;
-      setStatus("Ready to call");
+      setStatus(message);
     }
 
     async function ensureMedia() {
@@ -652,22 +652,26 @@
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
       pc.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
-        remoteVideo.play().catch(() => {});
+        remoteVideo.play().catch((error) => {
+          console.warn("Remote video playback blocked:", error);
+          setStatus("Remote video received, but playback was blocked. Tap the video to play.");
+        });
       };
       pc.onicecandidate = (event) => {
         if (event.candidate && peerId) {
           socket.emit("ice-candidate", { targetId: peerId, data: event.candidate });
         }
       };
+      const connection = pc;
       pc.onconnectionstatechange = () => {
-        if (!pc) return;
-        const state = pc.connectionState;
+        if (pc !== connection) return;
+        const state = connection.connectionState;
         setStatus("Call connection: " + state + (state === "connected" ? " ✓" : ""));
         if (state === "failed") {
           setStatus("Connection failed. This network may require TURN; check deployment TURN settings.");
-          cleanupCall(false);
+          cleanupCall(true, "WebRTC connection failed. Check TURN relay settings and browser logs.");
         } else if (state === "closed") {
-          cleanupCall(false);
+          cleanupCall(false, "Call closed.");
         }
       };
       pc.oniceconnectionstatechange = () => {
@@ -709,7 +713,7 @@
           : error?.name === "NotFoundError"
             ? "No camera or microphone was found on this device."
             : "Could not access camera/microphone: " + (error?.message || "unknown error"));
-        cleanupCall(false);
+        cleanupCall(false, "Camera/microphone could not be started: " + (error?.message || "unknown error"));
       }
     }
 
@@ -717,7 +721,7 @@
       try {
         peerId = fromId;
         await ensureMedia();
-        makePeerConnection();
+        await makePeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(window.pendingOffer));
         await flushCandidates();
         const answer = await pc.createAnswer();
@@ -734,11 +738,11 @@
       }
     }
 
-    function cleanupCall(notifyPeer = true) {
+    function cleanupCall(notifyPeer = true, message = "Ready to call") {
       if (notifyPeer && peerId) socket.emit("end-call");
       if (pc) { pc.ontrack = null; pc.onicecandidate = null; pc.close(); pc = null; }
       if (localStream) { localStream.getTracks().forEach((track) => track.stop()); localStream = null; }
-      resetCallUi();
+      resetCallUi(message);
     }
 
     callBtn.onclick = () => {
@@ -767,6 +771,7 @@
       if (!peerId || fromId !== peerId || !isCaller) return;
       try {
         await makePeerConnection();
+        if (peerId !== fromId || !pc) return;
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         socket.emit("webrtc-offer", { targetId: peerId, data: offer });
@@ -787,6 +792,7 @@
         window.pendingOffer = data;
         if (!localStream) await ensureMedia();
         if (!pc) await makePeerConnection();
+        if (peerId !== fromId || !pc) return;
         await pc.setRemoteDescription(new RTCSessionDescription(data));
         await flushCandidates();
         const answer = await pc.createAnswer();
@@ -818,15 +824,15 @@
       catch (error) { console.warn("Could not add ICE candidate", error); }
     });
 
-    socket.on("call-declined", () => {
-      setStatus("Call declined.");
-      cleanupCall(false);
+    socket.on("call-declined", () => cleanupCall(false, "Call declined."));
+    socket.on("call-ended", () => cleanupCall(false, "The other person ended the call."));
+    socket.on("call-error", (message) => cleanupCall(false, message));
+    socket.on("disconnect", () => {
+      if (peerId || inCall) cleanupCall(false, "Signaling server disconnected. Reconnect before calling.");
     });
-    socket.on("call-ended", () => {
-      setStatus("The other person ended the call.");
-      cleanupCall(false);
+    remoteVideo.addEventListener("click", () => {
+      if (remoteVideo.srcObject) remoteVideo.play().catch(console.warn);
     });
-    socket.on("call-error", (message) => { setStatus(message); cleanupCall(false); });
     socket.on("call-debug", (detail) => {
       console.warn("Call signaling:", detail);
       if (detail?.message) setStatus(detail.message);
