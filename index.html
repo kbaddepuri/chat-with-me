@@ -495,209 +495,264 @@
     });
 
     // =====================
-    // Video Call Logic
+    // Peer-to-peer WebRTC calls
     // =====================
     const localVideo = document.getElementById("localVideo");
     const remoteVideo = document.getElementById("remoteVideo");
     const callBtn = document.getElementById("callBtn");
     const muteLocalBtn = document.getElementById("muteLocalBtn");
     const muteRemoteBtn = document.getElementById("muteRemoteBtn");
+    const callArea = document.querySelector(".call-button-container");
+    const peerSelect = document.createElement("select");
+    peerSelect.setAttribute("aria-label", "Choose someone to call");
+    peerSelect.style.cssText = "max-width:190px;padding:10px;border-radius:12px;border:0;margin-right:8px;";
+    peerSelect.innerHTML = '<option value="">Choose a person…</option>';
+    callArea.prepend(peerSelect);
 
-    let pc;
-    let localStream;
+    const callStatus = document.createElement("p");
+    callStatus.setAttribute("role", "status");
+    callStatus.style.cssText = "color:white;font-size:13px;min-height:18px;";
+    callArea.parentElement.insertBefore(callStatus, callArea);
+
+    let pc = null;
+    let localStream = null;
+    let peerId = null;
     let inCall = false;
+    let pendingCandidates = [];
+    let isCaller = false;
 
-    async function startCall() {
-      try {
-        pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        });
+    socket.emit("register-user", username);
+    socket.on("online-users", (users) => {
+      const selected = peerSelect.value;
+      peerSelect.replaceChildren(new Option("Choose a person…", ""));
+      users.filter((u) => u.id !== socket.id).forEach((u) => {
+        peerSelect.add(new Option(u.name + " (online)", u.id));
+      });
+      if ([...peerSelect.options].some((o) => o.value === selected)) peerSelect.value = selected;
+    });
 
-        // Local stream
+    function setStatus(message) { callStatus.textContent = message; }
+    function resetCallUi() {
+      inCall = false;
+      isCaller = false;
+      peerId = null;
+      pendingCandidates = [];
+      callBtn.textContent = "🚀 Start Call";
+      callBtn.classList.remove("active");
+      localVideo.srcObject = null;
+      remoteVideo.srcObject = null;
+      setStatus("Ready to call");
+    }
+
+    async function ensureMedia() {
+      if (!localStream) {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localVideo.srcObject = localStream;
-        localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+      }
+      return localStream;
+    }
 
-      // Remote stream
+    function makePeerConnection() {
+      pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" }
+          // Add a TURN service here for reliable connectivity across restrictive networks.
+        ]
+      });
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
       pc.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
+        remoteVideo.play().catch(() => {});
       };
-
-      // ICE candidates
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("ice-candidate", event.candidate);
+        if (event.candidate && peerId) {
+          socket.emit("ice-candidate", { targetId: peerId, data: event.candidate });
         }
       };
-
-      // Connection state monitoring
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-      };
-
       pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
+        setStatus("Call connection: " + pc.connectionState);
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") cleanupCall(false);
       };
+      pc.onicecandidateerror = (event) => console.warn("ICE candidate error", event.errorText);
+    }
 
-        // Create and send offer
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("offer", offer);
-
-        inCall = true;
-        callBtn.textContent = "Stop Call";
-        callBtn.classList.add("active");
-      } catch (error) {
-        console.error("Error starting call:", error);
-        alert("Failed to start call. Please check your camera and microphone permissions.");
+    async function flushCandidates() {
+      if (!pc || !pc.remoteDescription) return;
+      const candidates = pendingCandidates.splice(0);
+      for (const candidate of candidates) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
+        catch (error) { console.warn("Could not add queued ICE candidate", error); }
       }
     }
 
-    function stopCall() {
-      if (pc) {
-        pc.close();
-        pc = null;
+    async function startCall() {
+      const targetId = peerSelect.value;
+      if (!targetId) { setStatus("Choose an online person first."); return; }
+      try {
+        await ensureMedia();
+        peerId = targetId;
+        isCaller = true;
+        socket.emit("call-user", { targetId });
+        setStatus("Calling… waiting for the other person to accept");
+      } catch (error) {
+        console.error(error);
+        setStatus("Camera/microphone permission is required to call.");
+        cleanupCall(false);
       }
-      if (localStream) {
-        localStream.getTracks().forEach((track) => track.stop());
-        localStream = null;
-      }
-      localVideo.srcObject = null;
-      remoteVideo.srcObject = null;
+    }
 
-      inCall = false;
-      callBtn.textContent = "Start Call";
-      callBtn.classList.remove("active");
-      console.log("📴 Call ended");
+    async function acceptCall(fromId) {
+      try {
+        peerId = fromId;
+        await ensureMedia();
+        makePeerConnection();
+        await pc.setRemoteDescription(new RTCSessionDescription(window.pendingOffer));
+        await flushCandidates();
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("webrtc-answer", { targetId: peerId, data: answer });
+        inCall = true;
+        callBtn.textContent = "End Call";
+        callBtn.classList.add("active");
+        setStatus("Connecting…");
+      } catch (error) {
+        console.error(error);
+        setStatus("Could not accept the call. Check camera/microphone permissions.");
+        cleanupCall(true);
+      }
+    }
+
+    function cleanupCall(notifyPeer = true) {
+      if (notifyPeer && peerId) socket.emit("end-call");
+      if (pc) { pc.ontrack = null; pc.onicecandidate = null; pc.close(); pc = null; }
+      if (localStream) { localStream.getTracks().forEach((track) => track.stop()); localStream = null; }
+      resetCallUi();
     }
 
     callBtn.onclick = () => {
-      if (inCall) {
-        stopCall();
-      } else {
-        startCall();
-      }
+      if (inCall || peerId) cleanupCall(true);
+      else startCall();
     };
 
-    socket.on("offer", async (offer) => {
+    socket.on("incoming-call", ({ fromId, fromName }) => {
+      if (peerId || inCall) {
+        socket.emit("call-declined", { targetId: fromId });
+        return;
+      }
+      peerId = fromId;
+      setStatus(fromName + " is calling…");
+      const accept = window.confirm(fromName + " is calling. Accept video call?");
+      if (!accept) {
+        socket.emit("call-declined", { targetId: fromId });
+        resetCallUi();
+        return;
+      }
+      socket.emit("call-accepted", { targetId: fromId });
+      // Offer arrives after the caller receives call-accepted.
+    });
+
+    socket.on("call-accepted", async ({ fromId }) => {
+      if (!peerId || fromId !== peerId || !isCaller) return;
       try {
-        pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        });
+        makePeerConnection();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("webrtc-offer", { targetId: peerId, data: offer });
+        inCall = true;
+        callBtn.textContent = "End Call";
+        callBtn.classList.add("active");
+        setStatus("Connecting…");
+      } catch (error) {
+        console.error(error);
+        setStatus("Could not start the call.");
+        cleanupCall(true);
+      }
+    });
 
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = stream;
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-        localStream = stream;
-
-      pc.ontrack = (event) => {
-        remoteVideo.srcObject = event.streams[0];
-      };
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("ice-candidate", event.candidate);
-        }
-      };
-
-      // Connection state monitoring
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-      };
-
-      pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
-      };
-
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    socket.on("webrtc-offer", async ({ fromId, data }) => {
+      if (peerId !== fromId || isCaller) return;
+      try {
+        window.pendingOffer = data;
+        if (!localStream) await ensureMedia();
+        if (!pc) makePeerConnection();
+        await pc.setRemoteDescription(new RTCSessionDescription(data));
+        await flushCandidates();
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        socket.emit("answer", answer);
-
+        socket.emit("webrtc-answer", { targetId: peerId, data: answer });
         inCall = true;
-        callBtn.textContent = "Stop Call";
+        callBtn.textContent = "End Call";
         callBtn.classList.add("active");
+        setStatus("Connecting…");
       } catch (error) {
-        console.error("Error handling offer:", error);
-        alert("Failed to accept call. Please check your camera and microphone permissions.");
+        console.error(error);
+        setStatus("Could not answer the call.");
+        cleanupCall(true);
       }
     });
 
-    socket.on("answer", async (answer) => {
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
-    });
-
-    socket.on("ice-candidate", async (candidate) => {
+    socket.on("webrtc-answer", async ({ fromId, data }) => {
+      if (!pc || peerId !== fromId || !isCaller) return;
       try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        console.error("ICE error:", err);
-      }
+        await pc.setRemoteDescription(new RTCSessionDescription(data));
+        await flushCandidates();
+      } catch (error) { console.warn("Could not set remote answer", error); }
     });
 
-    // =====================
-    // Mute/Unmute Logic
-    // =====================
+    socket.on("ice-candidate", async ({ fromId, data }) => {
+      if (peerId !== fromId || !data) return;
+      if (!pc || !pc.remoteDescription) { pendingCandidates.push(data); return; }
+      try { await pc.addIceCandidate(new RTCIceCandidate(data)); }
+      catch (error) { console.warn("Could not add ICE candidate", error); }
+    });
+
+    socket.on("call-declined", () => {
+      setStatus("Call declined.");
+      cleanupCall(false);
+    });
+    socket.on("call-ended", () => {
+      setStatus("The other person ended the call.");
+      cleanupCall(false);
+    });
+    socket.on("call-error", (message) => { setStatus(message); cleanupCall(false); });
+
     muteLocalBtn.onclick = () => {
       if (!localStream) return;
-      const audioTrack = localStream.getAudioTracks()[0];
-      if (audioTrack.enabled) {
-        audioTrack.enabled = false;
-        muteLocalBtn.textContent = "Unmute Mic";
-      } else {
-        audioTrack.enabled = true;
-        muteLocalBtn.textContent = "Mute Mic";
+      const track = localStream.getAudioTracks()[0];
+      if (track) {
+        track.enabled = !track.enabled;
+        muteLocalBtn.textContent = track.enabled ? "🎤 Mute" : "Unmute Mic";
       }
     };
-
     muteRemoteBtn.onclick = () => {
       if (!remoteVideo.srcObject) return;
       remoteVideo.muted = !remoteVideo.muted;
-      muteRemoteBtn.textContent = remoteVideo.muted ? "Unmute Remote" : "Mute Remote";
+      muteRemoteBtn.textContent = remoteVideo.muted ? "Unmute Remote" : "🔇 Mute Remote";
     };
+
     const enlargeLocalBtn = document.getElementById("enlargeLocalBtn");
     const enlargeRemoteBtn = document.getElementById("enlargeRemoteBtn");
-
-    function createEnlargedOverlay(video, title) {
-      const overlay = document.createElement('div');
-      overlay.className = 'video-enlarged-overlay';
-      
-      const closeBtn = document.createElement('div');
-      closeBtn.className = 'close-enlarged';
-      closeBtn.innerHTML = '×';
-      closeBtn.onclick = () => {
-        document.body.removeChild(overlay);
-      };
-      
-      const enlargedVideo = video.cloneNode(true);
+    function createEnlargedOverlay(video) {
+      if (!video.srcObject) return;
+      const overlay = document.createElement("div");
+      overlay.className = "video-enlarged-overlay";
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "close-enlarged";
+      closeBtn.textContent = "×";
+      closeBtn.setAttribute("aria-label", "Close enlarged video");
+      closeBtn.onclick = () => overlay.remove();
+      const enlargedVideo = document.createElement("video");
+      enlargedVideo.autoplay = true;
+      enlargedVideo.playsInline = true;
+      enlargedVideo.muted = video.muted;
       enlargedVideo.srcObject = video.srcObject;
-      
-      overlay.appendChild(enlargedVideo);
-      overlay.appendChild(closeBtn);
+      overlay.append(enlargedVideo, closeBtn);
+      overlay.onclick = (event) => { if (event.target === overlay) overlay.remove(); };
       document.body.appendChild(overlay);
-      
-      // Close on clicking overlay background
-      overlay.onclick = (e) => {
-        if (e.target === overlay) {
-          document.body.removeChild(overlay);
-        }
-      };
     }
-
-    enlargeLocalBtn.onclick = () => {
-      createEnlargedOverlay(localVideo, 'Your Video');
-    };
-
-    enlargeRemoteBtn.onclick = () => {
-      createEnlargedOverlay(remoteVideo, 'Remote Video');
-    };
-
+    enlargeLocalBtn.onclick = () => createEnlargedOverlay(localVideo);
+    enlargeRemoteBtn.onclick = () => createEnlargedOverlay(remoteVideo);
   </script>
 </body>
 </html>
