@@ -422,7 +422,11 @@
 <body>
   <!-- Chat Section -->
   <div class="chat-container">
-    <div class="chat-header">💬 Fancy Ephemeral Chat</div>
+    <div class="chat-header">
+      💬 Fancy Ephemeral Chat
+      <div id="partnerStatus" style="font-size:12px;font-weight:400;margin-top:6px;">Select a person to see their status</div>
+    </div>
+    <div id="typingIndicator" aria-live="polite" style="min-height:18px;padding:4px 12px;color:#65676b;font-size:12px;"></div>
     <div id="messages"></div>
     <div class="chat-input">
       <input id="input" autocomplete="off" placeholder="Type a message..." />
@@ -478,6 +482,7 @@
 
     sendBtn.onclick = () => {
       if (input.value) {
+        stopTyping();
         socket.emit("chat message", { user: username, text: input.value });
         appendMessage("Me: " + input.value, true);
         input.value = "";
@@ -492,6 +497,11 @@
       if (data.user !== username) {
         appendMessage(data.user + ": " + data.text, false);
       }
+    });
+
+    socket.on("typing", ({ fromId, fromName, isTyping }) => {
+      if (fromId !== peerSelect.value) return;
+      typingIndicator.textContent = isTyping ? fromName + " is typing…" : "";
     });
 
     // =====================
@@ -521,14 +531,68 @@
     let pendingCandidates = [];
     let isCaller = false;
 
+    const partnerStatus = document.getElementById("partnerStatus");
+    const typingIndicator = document.getElementById("typingIndicator");
+    const knownPeers = new Map();
+    let typingTimer = null;
+    let isTypingSent = false;
+
     socket.emit("register-user", username);
     socket.on("online-users", (users) => {
       const selected = peerSelect.value;
+      users.filter((u) => u.id !== socket.id).forEach((u) => knownPeers.set(u.id, u.name));
       peerSelect.replaceChildren(new Option("Choose a person…", ""));
       users.filter((u) => u.id !== socket.id).forEach((u) => {
-        peerSelect.add(new Option(u.name + " (online)", u.id));
+        peerSelect.add(new Option(u.name + " · Online", u.id));
       });
+
+      // Keep a previously selected person visible if they disconnect, so Offline is explicit.
+      if (selected && !users.some((u) => u.id === selected) && knownPeers.has(selected)) {
+        peerSelect.add(new Option(knownPeers.get(selected) + " · Offline", selected));
+      }
       if ([...peerSelect.options].some((o) => o.value === selected)) peerSelect.value = selected;
+      updatePartnerStatus(users);
+    });
+
+    function updatePartnerStatus(users) {
+      const selectedId = peerSelect.value;
+      if (!selectedId) {
+        partnerStatus.textContent = "Select a person to see their status";
+        typingIndicator.textContent = "";
+        return;
+      }
+      const peer = users.find((u) => u.id === selectedId);
+      const name = peer?.name || knownPeers.get(selectedId) || "This person";
+      partnerStatus.textContent = peer ? "🟢 " + name + " is online" : "⚪ " + name + " is offline";
+      if (!peer) typingIndicator.textContent = "";
+    }
+
+    peerSelect.addEventListener("change", () => {
+      stopTyping();
+      typingIndicator.textContent = "";
+      updatePartnerStatus(lastOnlineUsers);
+    });
+    let lastOnlineUsers = [];
+    socket.on("online-users", (users) => { lastOnlineUsers = users; });
+
+    function stopTyping() {
+      if (typingTimer) clearTimeout(typingTimer);
+      typingTimer = null;
+      if (isTypingSent && peerSelect.value) {
+        socket.emit("typing", { targetId: peerSelect.value, isTyping: false });
+      }
+      isTypingSent = false;
+    }
+
+    input.addEventListener("input", () => {
+      const targetId = peerSelect.value;
+      if (!targetId) return;
+      if (!isTypingSent) {
+        socket.emit("typing", { targetId, isTyping: true });
+        isTypingSent = true;
+      }
+      if (typingTimer) clearTimeout(typingTimer);
+      typingTimer = setTimeout(stopTyping, 900);
     });
 
     function setStatus(message) { callStatus.textContent = message; }
