@@ -70,3 +70,19 @@ The application uses ES modules. To modify:
 ## Deployment
 
 See `DEPLOYMENT.md` for deployment instructions to various platforms.
+
+
+## Video calling troubleshooting
+
+The app uses WebRTC for media and Socket.IO for signaling. The signaling server does not relay video by itself.
+
+- Use HTTPS on deployed sites (camera/microphone access generally requires a secure context).
+- Test with two separate browser sessions connected to the same deployed server.
+- Configure a TURN service for networks where direct peer-to-peer ICE connectivity fails. Set these environment variables on the server:
+  - `TURN_URLS`: comma-separated TURN URLs, for example `turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349?transport=tcp`
+  - `TURN_USERNAME`: TURN username
+  - `TURN_CREDENTIAL`: TURN credential
+- `GET /health` confirms the server is reachable.
+- `GET /webrtc-config` reports the ICE server configuration available to browsers. It includes TURN only when the environment variables are configured.
+
+Do not commit TURN credentials to the repository. For production, prefer short-lived credentials issued by your TURN provider.
