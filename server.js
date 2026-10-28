@@ -38,6 +38,16 @@ io.on("connection", (socket) => {
     });
   });
 
+  // Typing events are private to the selected chat partner.
+  socket.on("typing", ({ targetId, isTyping } = {}) => {
+    if (!targetId || targetId === socket.id || !displayNames.has(targetId)) return;
+    io.to(targetId).emit("typing", {
+      fromId: socket.id,
+      fromName: displayNames.get(socket.id) || "Guest",
+      isTyping: Boolean(isTyping)
+    });
+  });
+
   socket.on("call-user", ({ targetId } = {}) => {
     if (!targetId || targetId === socket.id || !displayNames.has(targetId)) {
       socket.emit("call-error", "That user is no longer online.");
