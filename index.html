@@ -631,14 +631,24 @@
       return localStream;
     }
 
-    function makePeerConnection() {
-      pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" }
-          // Add a TURN service here for reliable connectivity across restrictive networks.
-        ]
-      });
+    async function makePeerConnection() {
+      // Load deployment ICE configuration. Without TURN, some networks cannot connect.
+      let iceServers = [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ];
+      try {
+        const response = await fetch("/webrtc-config", { cache: "no-store" });
+        if (!response.ok) throw new Error("ICE config endpoint returned " + response.status);
+        const config = await response.json();
+        if (Array.isArray(config.iceServers) && config.iceServers.length) iceServers = config.iceServers;
+        if (!config.turnConfigured) {
+          console.warn("TURN is not configured. Calls may fail on restrictive networks.");
+        }
+      } catch (error) {
+        console.warn("Could not load ICE config; using public STUN servers.", error);
+      }
+      pc = new RTCPeerConnection({ iceServers });
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
       pc.ontrack = (event) => {
         remoteVideo.srcObject = event.streams[0];
@@ -650,10 +660,27 @@
         }
       };
       pc.onconnectionstatechange = () => {
-        setStatus("Call connection: " + pc.connectionState);
-        if (pc.connectionState === "failed" || pc.connectionState === "closed") cleanupCall(false);
+        if (!pc) return;
+        const state = pc.connectionState;
+        setStatus("Call connection: " + state + (state === "connected" ? " ✓" : ""));
+        if (state === "failed") {
+          setStatus("Connection failed. This network may require TURN; check deployment TURN settings.");
+          cleanupCall(false);
+        } else if (state === "closed") {
+          cleanupCall(false);
+        }
       };
-      pc.onicecandidateerror = (event) => console.warn("ICE candidate error", event.errorText);
+      pc.oniceconnectionstatechange = () => {
+        if (!pc) return;
+        const state = pc.iceConnectionState;
+        if (state === "checking") setStatus("Finding a route to the other person…");
+        if (state === "disconnected") setStatus("Connection interrupted. Trying to reconnect…");
+        if (state === "failed") setStatus("Network route failed. TURN relay may be required.");
+      };
+      pc.onicecandidateerror = (event) => {
+        console.warn("ICE candidate error", event.errorText);
+        setStatus("Network setup issue: " + (event.errorText || "ICE candidate error"));
+      };
     }
 
     async function flushCandidates() {
@@ -668,6 +695,7 @@
     async function startCall() {
       const targetId = peerSelect.value;
       if (!targetId) { setStatus("Choose an online person first."); return; }
+      if (!socket.connected) { setStatus("Chat server is disconnected. Refresh and try again."); return; }
       try {
         await ensureMedia();
         peerId = targetId;
@@ -676,7 +704,11 @@
         setStatus("Calling… waiting for the other person to accept");
       } catch (error) {
         console.error(error);
-        setStatus("Camera/microphone permission is required to call.");
+        setStatus(error?.name === "NotAllowedError"
+          ? "Camera/microphone permission was denied. Allow access and try again."
+          : error?.name === "NotFoundError"
+            ? "No camera or microphone was found on this device."
+            : "Could not access camera/microphone: " + (error?.message || "unknown error"));
         cleanupCall(false);
       }
     }
@@ -734,7 +766,7 @@
     socket.on("call-accepted", async ({ fromId }) => {
       if (!peerId || fromId !== peerId || !isCaller) return;
       try {
-        makePeerConnection();
+        await makePeerConnection();
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         socket.emit("webrtc-offer", { targetId: peerId, data: offer });
@@ -754,7 +786,7 @@
       try {
         window.pendingOffer = data;
         if (!localStream) await ensureMedia();
-        if (!pc) makePeerConnection();
+        if (!pc) await makePeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(data));
         await flushCandidates();
         const answer = await pc.createAnswer();
@@ -795,6 +827,10 @@
       cleanupCall(false);
     });
     socket.on("call-error", (message) => { setStatus(message); cleanupCall(false); });
+    socket.on("call-debug", (detail) => {
+      console.warn("Call signaling:", detail);
+      if (detail?.message) setStatus(detail.message);
+    });
 
     muteLocalBtn.onclick = () => {
       if (!localStream) return;
