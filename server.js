@@ -34,7 +34,7 @@ app.get("/webrtc-config", (_req, res) => {
     });
   }
   res.setHeader("Cache-Control", "no-store");
-  res.json({ iceServers, turnConfigured: turnUrls.length > 0 });
+  res.json({ iceServers, turnConfigured: turnUrls.length > 0 && Boolean(process.env.TURN_USERNAME) && Boolean(process.env.TURN_CREDENTIAL) });
 });
 
 // Socket.IO is used only for signaling. WebRTC carries audio/video whenever
