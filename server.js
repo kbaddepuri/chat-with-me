@@ -14,8 +14,31 @@ const io = new Server(server, {
 
 app.use(express.static(__dirname));
 
+// Basic health endpoint helps distinguish server/deployment issues from WebRTC issues.
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// STUN helps discover direct routes. TURN is required on some networks.
+// Configure TURN_URLS (comma-separated), TURN_USERNAME, and TURN_CREDENTIAL
+// in the deployment environment to enable relay fallback.
+app.get("/webrtc-config", (_req, res) => {
+  const iceServers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" }
+  ];
+  const turnUrls = (process.env.TURN_URLS || "").split(",").map((url) => url.trim()).filter(Boolean);
+  if (turnUrls.length && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+    iceServers.push({
+      urls: turnUrls,
+      username: process.env.TURN_USERNAME,
+      credential: process.env.TURN_CREDENTIAL
+    });
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ iceServers, turnConfigured: turnUrls.length > 0 });
+});
+
 // Socket.IO is used only for signaling. WebRTC carries audio/video whenever
-// a direct connection is possible; configure TURN for networks that need relay.
+// a direct connection is possible; TURN is needed on some restrictive networks.
 const displayNames = new Map();
 const activeCalls = new Map();
 
@@ -72,7 +95,11 @@ io.on("connection", (socket) => {
 
   for (const eventName of ["webrtc-offer", "webrtc-answer", "ice-candidate"]) {
     socket.on(eventName, ({ targetId, data } = {}) => {
-      if (!targetId || activeCalls.get(socket.id) !== targetId || activeCalls.get(targetId) !== socket.id) return;
+      if (!targetId || activeCalls.get(socket.id) !== targetId || activeCalls.get(targetId) !== socket.id) {
+        socket.emit("call-debug", { level: "warning", message: "Signaling event rejected: call participants do not match." });
+        return;
+      }
+      if (data == null) return;
       io.to(targetId).emit(eventName, { fromId: socket.id, data });
     });
   }
